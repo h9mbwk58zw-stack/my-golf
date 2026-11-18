@@ -1,0 +1,30 @@
+# コース作成ツール（course-builder）
+
+国土地理院の航空写真から、MY GOLF のコースマップを作る道具です。
+ゴルフ場の名前を Claude に伝えると、Claude がこの手順でコースを追加します。
+
+## 手順
+
+| 順番 | コマンド | やること |
+|---|---|---|
+| 1 | `fetch_aerial.py WORK --lat 緯度 --lon 経度 --radius 900` | 航空写真を取得してつなぐ（`aerial.jpg`） |
+| 2 | `segment.py WORK` | 芝・フェアウェイ・池・バンカーを色で塗り分け（`segment.jpg` で確認） |
+| 3 | `candidates.py WORK` | フェアウェイの形からホール候補を見つけ、記号を振る（`candidates.jpg`） |
+| 4 | `grid.py WORK [--crop x0,y0,x1,y1]` | ティー・グリーンの座標を読むための方眼画像 |
+| 5 | `holes.json` を書く | 候補とスコアカード・コースガイドを照らし合わせ、番号・パー・距離・ティー〜グリーンの位置を決める |
+| 6 | `build_course.py WORK` | ホールごとのコースデータを作る（`check.jpg`・`holes.jpg` で確認） |
+| 7 | `insert_course.py WORK/course.json index.html claude-version/my-golf-claude.html` | アプリに組み込む（同じidは置き換え） |
+
+`holes.json` の書き方は `build_course.py` の先頭に書いてあります。
+
+## 必要なもの
+
+- Python 3、numpy、scipy、opencv-python、Pillow
+- `cyberjapandata.gsi.go.jp` へのアクセス（Claude の場合は設定で許可済み）
+
+## 注意
+
+- 自動の塗り分けは目安です。芝が枯れている季節の写真や、グリーンとフェアウェイの区別は苦手です。
+- グリーンは位置を中心にした楕円（半径約13yd）で表しています。
+- 「どれが何番ホールか」は写真だけでは決まらないので、公式サイトのコースガイドやスコアカードで確認します。
+- 航空写真の出典：国土地理院。アプリのクレジットにも記載します。
