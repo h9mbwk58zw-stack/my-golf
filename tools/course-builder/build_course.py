@@ -124,9 +124,13 @@ def build(wd):
     for h in sorted(spec["holes"], key=lambda h: h["n"]):
         n = h["n"]
         lp = [list(map(int, p)) for p in h["line"]]
-        lp[0] = snap(lp[0], M["turf"], 30)
+        boxes = h.get("teeBoxes")
+        if boxes:
+            lp[0] = list(map(int, boxes[0]))   # 写真で確かめた一番後ろのティー台から線を始める
+        else:
+            lp[0] = snap(lp[0], M["turf"], 30)
         lp[-1] = snap(lp[-1], M["turf"], 30)
-        if spec.get("fitTee"):
+        if spec.get("fitTee") and not boxes:
             ft = next(t for t in tees if t["id"] == spec["fitTee"])
             lp, before, d = fit_tee(lp, ft["yd"][n - 1], mpp)
             # ティー台は小さくて芝として取れないことが多いので、芝から15m以内なら良しとする
@@ -135,6 +139,43 @@ def build(wd):
             report.append({"n": n, "target": ft["yd"][n - 1], "before": round(before), "moved": None if d is None else round(d),
                            "tee_on_turf": on})
         tf = frame(lp, mpp)
+        # ティー台：写真で確かめた位置、なければ各ティーの距離の位置を一番近い芝に寄せる
+        k_ = YD / mpp
+        if not boxes:
+            Lt = sum(math.dist(lp[i], lp[i + 1]) for i in range(len(lp) - 1)) / k_
+            back = max(t["yd"][n - 1] for t in tees)
+            boxes = []
+            for t in sorted(tees, key=lambda t: -t["yd"][n - 1]):
+                d = (Lt - t["yd"][n - 1]) if Lt >= back else (back - t["yd"][n - 1]) * Lt / back
+                rest, q = max(0.0, d) * k_, None
+                for i in range(len(lp) - 1):
+                    a_, b_ = np.array(lp[i], float), np.array(lp[i + 1], float); sl = np.linalg.norm(b_ - a_)
+                    if rest <= sl:
+                        q = a_ + (b_ - a_) * (rest / sl); break
+                    rest -= sl
+                q = lp[-1] if q is None else q
+                q = snap([int(q[0]), int(q[1])], M["turf"], int(15 / mpp))
+                if all(math.dist(q, b) > 9 * k_ for b in boxes):
+                    boxes.append(q)
+        tee_mask = np.zeros(M["turf"].shape, np.uint8)
+        tee_polys = []
+        nxt = np.array(lp[1], float)
+        for b in boxes:
+            c = np.array(b, float)
+            u = nxt - c; u = u / (np.linalg.norm(u) or 1)
+            ang = math.degrees(math.atan2(u[1], u[0]))
+            cv2.ellipse(tee_mask, (int(c[0]), int(c[1])), (int(7 * k_), int(5 * k_)), ang, 0, 360, 1, -1)
+            # 角丸の四角（長さ14yd×幅10yd）をアプリの座標で
+            cx_, cy_ = tf(c)
+            fu = np.array(tf(c + u)) - np.array([cx_, cy_]); fu = fu / (np.linalg.norm(fu) or 1); fr = np.array([fu[1], -fu[0]])
+            pts_ = []
+            for a in np.linspace(0, 2 * math.pi, 16, endpoint=False):
+                ca, sa = math.cos(a), math.sin(a)
+                ex = math.copysign(abs(ca) ** 0.5, ca) * 7; ey = math.copysign(abs(sa) ** 0.5, sa) * 5
+                pt = np.array([cx_, cy_]) + fu * ex + fr * ey
+                pts_.append(f"{round(pt[0])},{round(pt[1])}")
+            tee_polys.append("T" + " ".join(pts_))
+        tee_mask = tee_mask.astype(bool)
         corr = np.zeros(M["turf"].shape, np.uint8)
         cv2.polylines(corr, [np.array(lp, np.int32)], False, 1, thickness=2 * corr_px)
         corr = corr.astype(bool)
@@ -154,7 +195,7 @@ def build(wd):
             line20 = np.zeros_like(lmask)
             cv2.polylines(line20, [np.array(lp, np.int32)], False, 1, thickness=int(2 * 20 * YD / mpp))
             hw = np.unique(lab_w[line20.astype(bool) & (lab_w > 0)]); hw = hw[hw > 0]
-            base = base | np.isin(lab_w, hw) | line20.astype(bool)
+            base = base | np.isin(lab_w, hw) | line20.astype(bool) | ndi.binary_dilation(tee_mask, iterations=int(5 * YD / mpp))
             base = ndi.binary_dilation(base, iterations=int(7 * YD / mpp))
             sig = 9 / mpp
             P = (cv2.GaussianBlur(base.astype(np.float32), (0, 0), sig) > 0.42) & E
@@ -167,7 +208,13 @@ def build(wd):
             if (F & corr).sum() < 0.15 * max(1, (turf & corr).sum()):
                 F = F | (on & corr)
             # 林：楕円の中で芝・池・バンカー以外の場所
-            Wd = P & ~ndi.binary_dilation(turf, iterations=int(2 / mpp)) & ~A & ~B
+            # ティー台のまわりと、ティーから最初の区間の通り道は林にしない（明るいラフで見やすく）
+            apron = np.zeros_like(lmask)
+            for bx in boxes:
+                cv2.line(apron, tuple(map(int, bx)), tuple(map(int, lp[1])), 1, thickness=int(2 * 9 * YD / mpp))
+            apron = apron.astype(bool) & (ndi.distance_transform_edt(~tee_mask) * mpp / YD < 70)
+            apron |= ndi.binary_dilation(tee_mask, iterations=int(8 * YD / mpp))
+            Wd = P & ~ndi.binary_dilation(turf, iterations=int(2 / mpp)) & ~A & ~B & ~apron
             Wd = ndi.binary_opening(Wd, iterations=int(3 / mpp))
             masks = {"P": P, "W": Wd, "F": F, "B": B, "A": A}
             feats = []
@@ -212,6 +259,7 @@ def build(wd):
             feats = []
             for t, _, eps, mn in TYPES:
                 feats += polys(masks[t], eps, mn, mpp, tf, t)
+        feats += tee_polys
         # グリーン（円の目安）
         gx, gy = tf(lp[-1])
         rg = GREEN_R_YD
