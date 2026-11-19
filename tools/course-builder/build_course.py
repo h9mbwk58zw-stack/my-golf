@@ -15,14 +15,18 @@ holes.json の書き方（座標は aerial.jpg のピクセル。grid.py の方�
  "tees": [{"id":"regular","name":"レギュラー","color":"#f4f4f4","yd":[18ホール分]}],
  "defTee": "regular", "teeNote": "ティーの距離は○○のスコアカード。",
  "credit": "コース図は国土地理院の空中写真をもとに作成した目安です。",
+ "fitTee": "black",   ← 省略可。このティーの距離に合わせて、線の最初の点（ティー）を前後にずらす
  "holes": [{"n":1, "par":4, "line":[[ティーx,y],[曲がり角x,y],[グリーンx,y]]}, ...]
 }
+fitTee には一番後ろのティーを指定する（アプリは前のティーを、距離の差だけ線に沿って前に置く）。
+ずらす量が大きいホール（MAX_FIT_YD 以上）は、番号違いの疑いがあるので調整せず警告を出す。
 "line" はティーから順に、ドッグレッグの曲がり角（あれば）、最後にグリーンの中心。
 """
 import json, math, os, sys
 import numpy as np, cv2
 from scipy import ndimage as ndi
 
+MAX_FIT_YD = 100   # これ以上ずらす必要があるホールは調整しない（番号違いの疑い）
 CW_YD = 45        # アプリと同じ：センターラインから左右45ydがそのホールの範囲
 YD = 0.9144
 GREEN_R_YD = 13   # グリーンの半径の目安
@@ -66,6 +70,22 @@ def polys(mask, eps_m, min_m2, mpp, tf, prefix):
     return out
 
 
+def fit_tee(lp, target_yd, mpp):
+    """線の長さが target_yd になるように、最初の点を最初の区間の向きに沿って前後に動かす"""
+    k = YD / mpp  # 1ydあたりのピクセル
+    seg = [math.dist(lp[i], lp[i + 1]) for i in range(len(lp) - 1)]
+    cur = sum(seg) / k
+    d = target_yd - cur                        # +なら後ろへ延ばす、-なら前へ縮める
+    if abs(d) > MAX_FIT_YD:
+        return lp, cur, None
+    a, b = np.array(lp[0], float), np.array(lp[1], float)
+    u = (a - b) / (np.linalg.norm(a - b) or 1)
+    if d < 0 and -d * k >= seg[0] - 10 * k:   # 最初の区間より縮めるときは曲がり角を残してその手前まで
+        return lp, cur, None
+    t = a + u * d * k
+    return [[int(round(t[0])), int(round(t[1]))]] + lp[1:], cur, d
+
+
 def build(wd):
     meta = json.load(open(os.path.join(wd, "meta.json")))
     spec = json.load(open(os.path.join(wd, "holes.json")))
@@ -75,13 +95,21 @@ def build(wd):
     check = im.copy()
     tees = spec["tees"]
     deft = next(t for t in tees if t["id"] == spec["defTee"])
-    lines, sheets = [], []
+    lines, sheets, report = [], [], []
     corr_px = int(CW_YD * YD / mpp)
     for h in sorted(spec["holes"], key=lambda h: h["n"]):
         n = h["n"]
         lp = [list(map(int, p)) for p in h["line"]]
         lp[0] = snap(lp[0], M["turf"], 30)
         lp[-1] = snap(lp[-1], M["turf"], 30)
+        if spec.get("fitTee"):
+            ft = next(t for t in tees if t["id"] == spec["fitTee"])
+            lp, before, d = fit_tee(lp, ft["yd"][n - 1], mpp)
+            # ティー台は小さくて芝として取れないことが多いので、芝から15m以内なら良しとする
+            r_ = int(15 / mpp); x_, y_ = lp[0]
+            on = bool(M["turf"][max(0, y_ - r_):y_ + r_ + 1, max(0, x_ - r_):x_ + r_ + 1].any())
+            report.append({"n": n, "target": ft["yd"][n - 1], "before": round(before), "moved": None if d is None else round(d),
+                           "tee_on_turf": on})
         tf = frame(lp, mpp)
         corr = np.zeros(M["turf"].shape, np.uint8)
         cv2.polylines(corr, [np.array(lp, np.int32)], False, 1, thickness=2 * corr_px)
@@ -126,6 +154,11 @@ def build(wd):
     cols = 6
     rows = [np.hstack(sheets[i:i + cols] + [np.zeros_like(sheets[0])] * (cols - len(sheets[i:i + cols]))) for i in range(0, len(sheets), cols)]
     cv2.imwrite(os.path.join(wd, "holes.jpg"), np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if report:
+        json.dump(report, open(os.path.join(wd, "fit_report.json"), "w"), ensure_ascii=False, indent=1)
+        for r in report:
+            st = "調整せず（ずれが大きい：番号を確認）" if r["moved"] is None else f"{r['moved']:+d}yd ずらした" + ("" if r["tee_on_turf"] else "（ティーが芝の外：位置を確認）")
+            print(f"{r['n']:>2}番  目標{r['target']}yd  元の線{r['before']}yd  {st}")
     print(f"{len(lines)} holes -> course.json, check.jpg, holes.jpg")
 
 
