@@ -35,13 +35,16 @@ def segment(im):
     turf = keep_big(turf, 3000)
     trees = green & ~turf
     # コースの範囲：芝のまとまりの外形
-    area = ndi.binary_dilation(turf, iterations=40)
-    lab, n = ndi.label(area)
-    sz = ndi.sum(area, lab, range(1, n + 1))
-    area = ndi.binary_erosion(lab == 1 + np.argmax(sz), iterations=25)
-    hull = cv2.convexHull(np.argwhere(area)[:, ::-1].astype(np.int32))
+    # 道路などで分かれた部分も含めるため、大きなまとまりごとに外形をとる
+    grown = ndi.binary_dilation(turf, iterations=40)
+    lab, n = ndi.label(grown)
+    sz = ndi.sum(grown, lab, range(1, n + 1))
     area = np.zeros(turf.shape, np.uint8)
-    cv2.fillPoly(area, [hull], 1)
+    for i in np.where(sz >= 0.02 * sz.max())[0]:
+        part = ndi.binary_erosion(lab == i + 1, iterations=25)
+        if part.any():
+            hull = cv2.convexHull(np.argwhere(part)[:, ::-1].astype(np.int32))
+            cv2.fillPoly(area, [hull], 1)
     area = area.astype(bool)
     turf &= area
     # フェアウェイ：芝の中でも明るい部分
@@ -52,6 +55,15 @@ def segment(im):
     water0 = keep_big(ndi.binary_opening(water0, iterations=3), 800)
     water0 = ndi.binary_fill_holes(ndi.binary_closing(water0, iterations=3))
     lw, n = ndi.label(water0)
+    # コースの端にある池も範囲に入れる（池に接している範囲は、池ごと外形をとり直す）
+    near = np.unique(lw[ndi.binary_dilation(area, iterations=15) & water0]); near = near[near > 0]
+    grown = area | np.isin(lw, near)
+    lab2, n2 = ndi.label(grown)
+    area = np.zeros(turf.shape, np.uint8)
+    for i in range(1, n2 + 1):
+        hull = cv2.convexHull(np.argwhere(lab2 == i)[:, ::-1].astype(np.int32))
+        cv2.fillPoly(area, [hull], 1)
+    area = area.astype(bool)
     t = np.unique(lw[area & water0 & ndi.binary_dilation(turf | trees, iterations=3)])
     water = keep_big(np.isin(lw, t[t > 0]) & area, 1500)
     # バンカー：明るく彩度の低い砂。芝の近くだけ

@@ -33,6 +33,7 @@ GREEN_R_YD = 13   # グリーンの半径の目安
 TYPES = [("P", None, 3.0, 400), ("W", None, 3.5, 250), ("A", "water", 3.0, 300), ("F", "fw", 2.5, 250), ("B", "bunker", 1.2, 15)]
 AREA_HALF_YD = 45   # 楕円の短い方の半径（ホールの左右の幅）
 AREA_PAD_YD = 22    # 楕円をティーの後ろとグリーンの奥に伸ばす長さ
+CTX_YD = 70         # 楕円の外にどこまで周りの景色（隣のホール・林・池）を描くか
 
 
 def snap(pt, mask, r):
@@ -143,7 +144,21 @@ def build(wd):
         cv2.circle(gcirc, tuple(lp[-1]), int(GREEN_R_YD * YD / mpp), 1, -1)
         if spec.get("areaShape", "ellipse") == "ellipse":
             # 楕円で切り取る：隣のホールが少し入っても、形のきれいさを優先
-            P = ellipse_area(lp, M["turf"].shape, mpp)
+            E = ellipse_area(lp, M["turf"].shape, mpp)
+            # 芝のまとまり（線にかかるもの）＋線にかかる池＋グリーンを少し広げて、なめらかな形にする
+            base = (M["turf"] | gcirc.astype(bool)) & E
+            lab_b, _ = ndi.label(base)
+            hb = np.unique(lab_b[lmask.astype(bool) & base]); hb = hb[hb > 0]
+            base = np.isin(lab_b, hb)
+            lab_w, _ = ndi.label(M["water"] & E)
+            line20 = np.zeros_like(lmask)
+            cv2.polylines(line20, [np.array(lp, np.int32)], False, 1, thickness=int(2 * 20 * YD / mpp))
+            hw = np.unique(lab_w[line20.astype(bool) & (lab_w > 0)]); hw = hw[hw > 0]
+            base = base | np.isin(lab_w, hw) | line20.astype(bool)
+            base = ndi.binary_dilation(base, iterations=int(7 * YD / mpp))
+            sig = 9 / mpp
+            P = (cv2.GaussianBlur(base.astype(np.float32), (0, 0), sig) > 0.42) & E
+            P = ndi.binary_fill_holes(P)
             A = M["water"] & P
             B = M["bunker"] & P & ~A
             turf = (M["turf"] | gcirc.astype(bool)) & P
@@ -159,7 +174,19 @@ def build(wd):
             for t, _, eps, mn in TYPES:
                 feats += polys(masks[t], eps, mn, mpp, tf, t)
             masks = None
+            # 周りの景色（楕円の外）：アプリで薄く描く背景。プレーの計算には使わない
+            big = cv2.dilate(P.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(2 * CTX_YD * YD / mpp) | 1,) * 2)).astype(bool)
+            out = big & ~ndi.binary_erosion(P, iterations=int(3 / mpp))
+            cturf = M["turf"] & out
+            cW = out & ~ndi.binary_dilation(M["turf"], iterations=int(2 / mpp)) & ~M["water"] & ~M["bunker"]
+            cW = ndi.binary_opening(cW, iterations=int(3 / mpp))
+            cmasks = {"W": cW, "F": M["fw"] & out & ~M["water"], "A": M["water"] & out, "B": M["bunker"] & out}
+            ctx = []
+            for t in "WFAB":
+                ctx += polys(cmasks[t], 4.0 if t != "B" else 1.5, 400 if t != "B" else 20, mpp, tf, t)
+            ctx_str = "|".join(ctx)
         else:
+            ctx_str = ""
             masks = {}
         # プレー範囲 = 芝のうちホールの線に触れているまとまり＋グリーン
         p = (M["turf"] | gcirc.astype(bool)) & corr
@@ -191,7 +218,7 @@ def build(wd):
         feats.append("G" + " ".join(f"{round(gx + rg * math.cos(a))},{round(gy + rg * 0.85 * math.sin(a))}" for a in np.linspace(0, 2 * math.pi, 14, endpoint=False)))
         ln = [tf(q) for q in lp]
         L = sum(math.dist(ln[i], ln[i + 1]) for i in range(len(ln) - 1))
-        lines.append(f"{n};{h['par']};{deft['yd'][n - 1]};{round(L)};" + " ".join(f"{round(x)},{round(y)}" for x, y in ln) + ";" + "|".join(feats))
+        lines.append(f"{n};{h['par']};{deft['yd'][n - 1]};{round(L)};" + " ".join(f"{round(x)},{round(y)}" for x, y in ln) + ";" + "|".join(feats) + (";" + ctx_str if ctx_str else ""))
         # 確認用：航空写真に線と番号
         cv2.polylines(check, [np.array(lp, np.int32)], False, (0, 255, 255), 3)
         cv2.circle(check, tuple(lp[0]), 7, (255, 255, 255), -1)
