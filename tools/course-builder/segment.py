@@ -130,7 +130,14 @@ if __name__ == "__main__":
         ys, xs = slice(max(0, -oy), min(canvas.shape[0], s18.shape[0] - oy)), slice(max(0, -ox), min(canvas.shape[1], s18.shape[1] - ox))
         canvas[ys, xs] = s18[ys.start + oy:ys.stop + oy, xs.start + ox:xs.stop + ox]
         b17 = cv2.resize(canvas, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_AREA) > 0.4
-        M["bunker"] = b17 & M["area"] & ~M["water"]
+        # コースの範囲の端にあるグリーンまわりのバンカーも拾う（範囲を少し広げて判定し、範囲もバンカーまで広げる）
+        M["bunker"] = b17 & ndi.binary_dilation(M["area"] | M["turf"], iterations=15) & ~M["water"]
+        lab3, n3 = ndi.label(M["area"] | ndi.binary_dilation(M["bunker"], iterations=6))
+        area = np.zeros(M["area"].shape, np.uint8)
+        for i in range(1, n3 + 1):
+            hull = cv2.convexHull(np.argwhere(lab3 == i)[:, ::-1].astype(np.int32))
+            cv2.fillPoly(area, [hull], 1)
+        M["area"] = area.astype(bool)
         M["turf"] &= ~M["bunker"]
         M["fw"] &= ~M["bunker"]
     np.savez_compressed(os.path.join(wd, "masks.npz"), **M)

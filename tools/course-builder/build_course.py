@@ -59,17 +59,33 @@ def frame(line_px, mpp):
     return tf
 
 
+SMOOTH_M = {"P": 6.0, "W": 3.0, "A": 2.5, "F": 3.0, "B": 0.9}   # 種類ごとのなめらかさ（ぼかしの強さ m）
+
+
 def polys(mask, eps_m, min_m2, mpp, tf, prefix):
+    # ギザギザを消すため、マスクを少しぼかしてから輪郭をとる（細かい点で残し、アプリ側でも曲線で描く）
+    sm = SMOOTH_M.get(prefix, 1.5) / mpp
+    up = 2 if prefix == "B" else 1          # バンカーは小さいので2倍に拡大してから輪郭をとる
+    m = mask.astype(np.float32)
+    if up > 1:
+        m = cv2.resize(m, None, fx=up, fy=up, interpolation=cv2.INTER_LINEAR)
+    if sm > 0.3:
+        m = cv2.GaussianBlur(m, (0, 0), sm * up)
+    mask = m > 0.5
+    eps_m = min(eps_m, 1.2 if prefix != "B" else 0.5)
+    mpp_ = mpp / up
     cs, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    cs = [c.astype(np.float64) / up for c in cs]
     out = []
     for c in cs:
-        if cv2.contourArea(c) * mpp * mpp < min_m2:
+        if cv2.contourArea(c.astype(np.float32)) * mpp * mpp < min_m2:
             continue
-        a = cv2.approxPolyDP(c, max(1.0, eps_m / mpp), True)[:, 0, :]
+        a = cv2.approxPolyDP(c.astype(np.float32), max(0.35, eps_m / mpp), True)[:, 0, :]
         if len(a) < 3:
             continue
         pts = [tf(p) for p in a]
-        out.append(prefix + " ".join(f"{round(x)},{round(y)}" for x, y in pts))
+        nd = 1 if prefix in "BT" else 0      # 小さいバンカーは小数1桁まで（角ばらないように）
+        out.append(prefix + " ".join(f"{round(x, nd):g},{round(y, nd):g}" for x, y in pts))
     return out
 
 
