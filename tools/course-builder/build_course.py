@@ -124,8 +124,20 @@ def build(wd):
         hit = np.unique(lab[lmask.astype(bool) & p]); hit = hit[hit > 0]
         P = ndi.binary_closing(np.isin(lab, hit), iterations=3) & corr
         near = ndi.binary_dilation(P, iterations=int(6 / mpp)) & corr
-        masks = {"P": P, "F": M["fw"] & P, "B": M["bunker"] & near,
-                 "A": M["water"] & ndi.binary_dilation(corr, iterations=int(10 / mpp))}
+        B = M["bunker"] & near
+        A = M["water"] & ndi.binary_dilation(corr, iterations=int(10 / mpp))
+        # 線から20yd以内にかかる池（池越え・池沿い）は、アプリで描けるようにプレー範囲に含める
+        lab_a, na = ndi.label(A)
+        line20 = np.zeros_like(lmask)
+        cv2.polylines(line20, [np.array(lp, np.int32)], False, 1, thickness=int(2 * 20 * YD / mpp))
+        hitA = np.unique(lab_a[line20.astype(bool) & A]); hitA = hitA[hitA > 0]
+        P = P | (np.isin(lab_a, hitA) & corr) | B
+        P = ndi.binary_closing(P, iterations=2) & corr
+        F = M["fw"] & P & ~A
+        # フェアウェイが自動で取れなかったホールは、プレー範囲の内側（端から8yd）をフェアウェイとみなす
+        if F.sum() < 0.15 * max(1, (P & ~A & ~B).sum()):
+            F = ndi.binary_erosion(P & ~A & ~B, iterations=int(8 * YD / mpp))
+        masks = {"P": P, "F": F, "B": B, "A": A}
         feats = []
         for t, _, eps, mn in TYPES:
             feats += polys(masks[t], eps, mn, mpp, tf, t)
