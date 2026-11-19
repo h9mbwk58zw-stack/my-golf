@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """航空写真を色と模様で塗り分ける（芝・フェアウェイ・池・バンカー・林）。
 
-使い方:  python3 segment.py WORKDIR
+使い方:  python3 segment.py WORKDIR [--hi WORKDIR18]
+  --hi に fetch_aerial.py --zoom 18 で取った同じ範囲のフォルダを渡すと、
+  バンカーを2倍細かい写真の砂の色（明るく、緑っぽさがない）と、まわりの芝との明るさの差で見分ける
 出力:
   WORKDIR/masks.npz      各地物のマスク（turf, fw, water, bunker, area）
   WORKDIR/segment.jpg    左：写真 / 右：塗り分け結果（確認用）
@@ -73,6 +75,33 @@ def segment(im):
     return dict(turf=turf, fw=fw, water=water, bunker=bk, area=area)
 
 
+def sand_hi(im18, mpp18):
+    """ズーム18の写真から砂（バンカー）を見分ける。明るく、緑っぽさがなく、まわりより目立って明るいもの"""
+    lab = cv2.cvtColor(im18, cv2.COLOR_BGR2LAB).astype(np.float32)
+    Ls, As, Bs = [cv2.GaussianBlur(lab[..., i], (0, 0), 1.2) for i in range(3)]
+    sand = (Ls > 162) & (As > 119.5) & (Bs > 128) & (Bs < 160)
+    sand = ndi.binary_fill_holes(ndi.binary_closing(ndi.binary_opening(sand, iterations=1), iterations=2))
+    lab_, n = ndi.label(sand)
+    if not n:
+        return sand
+    sz = ndi.sum(sand, lab_, range(1, n + 1)) * mpp18 * mpp18
+    r = max(2, int(2.5 / mpp18))
+    keep = []
+    for i, sl in enumerate(ndi.find_objects(lab_), 1):
+        if not (6 < sz[i - 1] < 6000):
+            continue
+        y0, y1 = max(0, sl[0].start - r - 2), sl[0].stop + r + 2
+        x0, x1 = max(0, sl[1].start - r - 2), sl[1].stop + r + 2
+        mk = lab_[y0:y1, x0:x1] == i
+        ring = ndi.binary_dilation(mk, iterations=r) & ~mk
+        if not ring.any():
+            continue
+        dL = np.median(Ls[y0:y1, x0:x1][mk]) - np.median(Ls[y0:y1, x0:x1][ring])
+        if dL > 28 and np.median(As[y0:y1, x0:x1][ring]) < 125:   # 枯れ芝はまわりとの差が小さい
+            keep.append(i)
+    return np.isin(lab_, keep)
+
+
 def preview(im, M):
     vis = np.full_like(im, (36, 33, 30))
     vis[M["area"]] = (40, 95, 40)
@@ -86,9 +115,24 @@ def preview(im, M):
 
 
 if __name__ == "__main__":
+    import json
     wd = sys.argv[1]
     im = cv2.imread(os.path.join(wd, "aerial.jpg"))
     M = segment(im)
+    if "--hi" in sys.argv:
+        hd = sys.argv[sys.argv.index("--hi") + 1]
+        im18 = cv2.imread(os.path.join(hd, "aerial.jpg"))
+        m17, m18 = json.load(open(os.path.join(wd, "meta.json"))), json.load(open(os.path.join(hd, "meta.json")))
+        s18 = sand_hi(im18, m18["mpp"]).astype(np.float32)
+        # ズーム18の位置をズーム17の画像に合わせる（ズーム18のピクセル = ズーム17の2倍）
+        ox, oy = m17["px0"] * 2 - m18["px0"], m17["py0"] * 2 - m18["py0"]
+        canvas = np.zeros((im.shape[0] * 2, im.shape[1] * 2), np.float32)
+        ys, xs = slice(max(0, -oy), min(canvas.shape[0], s18.shape[0] - oy)), slice(max(0, -ox), min(canvas.shape[1], s18.shape[1] - ox))
+        canvas[ys, xs] = s18[ys.start + oy:ys.stop + oy, xs.start + ox:xs.stop + ox]
+        b17 = cv2.resize(canvas, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_AREA) > 0.4
+        M["bunker"] = b17 & M["area"] & ~M["water"]
+        M["turf"] &= ~M["bunker"]
+        M["fw"] &= ~M["bunker"]
     np.savez_compressed(os.path.join(wd, "masks.npz"), **M)
     cv2.imwrite(os.path.join(wd, "segment.jpg"), preview(im, M), [cv2.IMWRITE_JPEG_QUALITY, 88])
     print({k: round(float(v.mean()), 4) for k, v in M.items()})
