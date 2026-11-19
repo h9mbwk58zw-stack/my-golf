@@ -30,7 +30,9 @@ MAX_FIT_YD = 100   # これ以上ずらす必要があるホールは調整し�
 CW_YD = 45        # アプリと同じ：センターラインから左右45ydがそのホールの範囲
 YD = 0.9144
 GREEN_R_YD = 13   # グリーンの半径の目安
-TYPES = [("A", "water", 3.0, 300), ("P", None, 3.0, 400), ("F", "fw", 2.5, 250), ("B", "bunker", 1.2, 15)]
+TYPES = [("P", None, 3.0, 400), ("W", None, 3.5, 250), ("A", "water", 3.0, 300), ("F", "fw", 2.5, 250), ("B", "bunker", 1.2, 15)]
+AREA_HALF_YD = 45   # 楕円の短い方の半径（ホールの左右の幅）
+AREA_PAD_YD = 22    # 楕円をティーの後ろとグリーンの奥に伸ばす長さ
 
 
 def snap(pt, mask, r):
@@ -86,6 +88,27 @@ def fit_tee(lp, target_yd, mpp):
     return [[int(round(t[0])), int(round(t[1]))]] + lp[1:], cur, d
 
 
+def ellipse_area(lp, shape, mpp):
+    """ホールの線に沿った楕円（曲がるホールは区間ごとの楕円をなめらかにつないだ形）"""
+    k = YD / mpp
+    m = np.zeros(shape, np.uint8)
+    n = len(lp) - 1
+    for i in range(n):
+        a, b = np.array(lp[i], float), np.array(lp[i + 1], float)
+        L = np.linalg.norm(b - a)
+        pa = AREA_PAD_YD * k if i == 0 else 0
+        pb = AREA_PAD_YD * k if i == n - 1 else 0
+        u = (b - a) / (L or 1)
+        a2, b2 = a - u * pa, b + u * pb
+        c = (a2 + b2) / 2
+        ang = math.degrees(math.atan2(u[1], u[0]))
+        semi = (np.linalg.norm(b2 - a2) / 2) + (AREA_HALF_YD * k * 0.35 if n > 1 else 0)
+        cv2.ellipse(m, (int(c[0]), int(c[1])), (int(semi), int(AREA_HALF_YD * k)), ang, 0, 360, 1, -1)
+    r = int(12 * k) | 1
+    m = cv2.GaussianBlur(m.astype(np.float32), (r, r), 0) > 0.5
+    return m
+
+
 def build(wd):
     meta = json.load(open(os.path.join(wd, "meta.json")))
     spec = json.load(open(os.path.join(wd, "holes.json")))
@@ -118,6 +141,26 @@ def build(wd):
         cv2.polylines(lmask, [np.array(lp, np.int32)], False, 1, thickness=max(3, int(8 / mpp)))
         gcirc = np.zeros_like(lmask)
         cv2.circle(gcirc, tuple(lp[-1]), int(GREEN_R_YD * YD / mpp), 1, -1)
+        if spec.get("areaShape", "ellipse") == "ellipse":
+            # 楕円で切り取る：隣のホールが少し入っても、形のきれいさを優先
+            P = ellipse_area(lp, M["turf"].shape, mpp)
+            A = M["water"] & P
+            B = M["bunker"] & P & ~A
+            turf = (M["turf"] | gcirc.astype(bool)) & P
+            F = M["fw"] & P & ~A
+            on = ndi.binary_erosion(turf & ~A & ~B, iterations=int(8 * YD / mpp))
+            if (F & corr).sum() < 0.15 * max(1, (turf & corr).sum()):
+                F = F | (on & corr)
+            # 林：楕円の中で芝・池・バンカー以外の場所
+            Wd = P & ~ndi.binary_dilation(turf, iterations=int(2 / mpp)) & ~A & ~B
+            Wd = ndi.binary_opening(Wd, iterations=int(3 / mpp))
+            masks = {"P": P, "W": Wd, "F": F, "B": B, "A": A}
+            feats = []
+            for t, _, eps, mn in TYPES:
+                feats += polys(masks[t], eps, mn, mpp, tf, t)
+            masks = None
+        else:
+            masks = {}
         # プレー範囲 = 芝のうちホールの線に触れているまとまり＋グリーン
         p = (M["turf"] | gcirc.astype(bool)) & corr
         lab, k = ndi.label(p)
@@ -137,10 +180,11 @@ def build(wd):
         # フェアウェイが自動で取れなかったホールは、プレー範囲の内側（端から8yd）をフェアウェイとみなす
         if F.sum() < 0.15 * max(1, (P & ~A & ~B).sum()):
             F = ndi.binary_erosion(P & ~A & ~B, iterations=int(8 * YD / mpp))
-        masks = {"P": P, "F": F, "B": B, "A": A}
-        feats = []
-        for t, _, eps, mn in TYPES:
-            feats += polys(masks[t], eps, mn, mpp, tf, t)
+        if masks is not None:
+            masks = {"P": P, "W": np.zeros_like(P), "F": F, "B": B, "A": A}
+            feats = []
+            for t, _, eps, mn in TYPES:
+                feats += polys(masks[t], eps, mn, mpp, tf, t)
         # グリーン（円の目安）
         gx, gy = tf(lp[-1])
         rg = GREEN_R_YD
