@@ -14,6 +14,27 @@ import numpy as np, cv2
 from scipy import ndimage as ndi
 
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def match_color(im, ref_name="ref_color.jpg"):
+    """写真の色の分布を、基準の写真（PGM石岡のズーム17/18）に合わせる。
+    もやがかかった写真や季節の違う写真でも、同じしきい値で判別できるようにするため"""
+    from skimage.exposure import match_histograms
+    ref = cv2.imread(os.path.join(HERE, ref_name))
+    if ref is None:
+        return im
+    lab = cv2.cvtColor(im, cv2.COLOR_BGR2LAB)
+    rlab = cv2.cvtColor(ref, cv2.COLOR_BGR2LAB)
+    out = match_histograms(lab, rlab, channel_axis=-1)
+    return cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+
+def is_hazy(im):
+    hsv = cv2.cvtColor(cv2.resize(im, (400, 400)), cv2.COLOR_BGR2HSV)
+    return float(np.median(hsv[..., 1])) < 60 or float(np.percentile(hsv[..., 2], 2)) > 45
+
+
 def keep_big(mask, min_px, max_px=None):
     lab, n = ndi.label(mask)
     if n == 0:
@@ -118,10 +139,17 @@ if __name__ == "__main__":
     import json
     wd = sys.argv[1]
     im = cv2.imread(os.path.join(wd, "aerial.jpg"))
+    hazy = is_hazy(im) or "--match" in sys.argv
+    if hazy:
+        print("写真の色を基準に合わせます（もや・色かぶりの補正）")
+        im = match_color(im)
+        cv2.imwrite(os.path.join(wd, "aerial_matched.jpg"), im, [cv2.IMWRITE_JPEG_QUALITY, 90])
     M = segment(im)
     if "--hi" in sys.argv:
         hd = sys.argv[sys.argv.index("--hi") + 1]
         im18 = cv2.imread(os.path.join(hd, "aerial.jpg"))
+        if hazy:
+            im18 = match_color(im18, "ref_color18.jpg")
         m17, m18 = json.load(open(os.path.join(wd, "meta.json"))), json.load(open(os.path.join(hd, "meta.json")))
         s18 = sand_hi(im18, m18["mpp"]).astype(np.float32)
         # ズーム18の位置をズーム17の画像に合わせる（ズーム18のピクセル = ズーム17の2倍）
