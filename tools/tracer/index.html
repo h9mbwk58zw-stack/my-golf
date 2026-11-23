@@ -22,7 +22,7 @@ header{background:var(--panel);border-bottom:1px solid var(--line);padding-block
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:6px}
 .top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 h1{font-family:var(--f-num);font-size:17px;margin:0;letter-spacing:.02em}
-.course{font-size:13px;color:var(--muted)}
+.csel{font-family:var(--f-ui);font-size:13px;color:var(--fg);background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:3px 6px}
 .status{margin-left:auto;font-size:12px;color:var(--muted)}
 .status.ok{color:var(--ok)}
 .chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
@@ -59,7 +59,7 @@ textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-ra
 </style>
 <div class="app">
   <header>
-    <div class="top"><h1>コースなぞり</h1><span class="course" id="courseName">倶楽部我山</span><span class="status" id="status">読み込み中…</span></div>
+    <div class="top"><h1>コースなぞり</h1><select id="courseSel" class="csel" aria-label="ゴルフ場"></select><span class="status" id="status">読み込み中…</span></div>
     <div class="chips" id="chips"></div>
   </header>
   <div class="stage" id="stage">
@@ -86,13 +86,20 @@ textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-ra
   </footer>
 </div>
 <script>
-const COURSE={id:"gazan",name:"倶楽部我山",img:"gazan.jpg",mpp:0.9633804138343002,
-  card:[[4,405],[5,541],[3,188],[4,418],[4,395],[4,350],[5,528],[3,135],[4,377],[4,365],[5,459],[3,182],[4,430],[4,341],[5,509],[3,155],[4,313],[4,355]]};
+const COURSES={
+ hamano:{id:"hamano",name:"浜野GC",img:"hamano.jpg",mpp:0.9672,card:[[4,423],[4,413],[4,370],[4,414],[3,172],[5,559],[4,454],[5,547],[3,231],[4,445],[4,439],[5,577],[3,209],[4,394],[4,451],[4,374],[3,218],[5,527]]},
+ hirakawa:{id:"hirakawa",name:"平川CC",img:"hirakawa.jpg",mpp:0.9668,card:[[4,430],[4,376],[3,166],[5,524],[4,483],[5,537],[4,458],[3,214],[4,362],[5,565],[4,427],[4,440],[3,160],[4,450],[5,519],[4,420],[3,222],[4,453]]},
+ gazan:{id:"gazan",name:"倶楽部我山",img:"gazan.jpg",mpp:0.9633804138343002,card:[[4,405],[5,541],[3,188],[4,418],[4,395],[4,350],[5,528],[3,135],[4,377],[4,365],[5,459],[3,182],[4,430],[4,341],[5,509],[3,155],[4,313],[4,355]]}};
+const CID=(location.hash.slice(1) in COURSES)?location.hash.slice(1):"hamano";
+const COURSE=COURSES[CID];
 const CANDS=[["A",[[1104,363],[1048,338],[993,309],[936,287]]],["B",[[1346,516],[1272,477],[1197,436],[1121,401]]],["C",[[1333,569],[1241,532],[1154,500],[1064,462]]],["D",[[1064,531],[1389,663]]],["E",[[715,498],[774,591],[830,680],[889,773]]],["F",[[894,446],[919,592],[968,735],[1009,884]]],["G",[[655,534],[708,622],[750,713],[809,800]]],["H",[[1420,744],[1319,706],[1216,663],[1121,623]]],["I",[[596,560],[622,656],[640,745],[655,850]]],["J",[[1047,665],[1067,729],[1078,791],[1101,852]]],["K",[[514,771],[495,890],[485,1005],[472,1129]]],["L",[[710,902],[659,961],[609,1021],[554,1078]]],["M",[[257,881],[249,998],[236,1113],[218,1231]]],["N",[[314,954],[321,1035],[342,1113],[339,1199]]],["O",[[621,1169],[501,1253],[371,1296],[238,1349]]],["P",[[161,1224],[131,1262],[109,1306],[74,1342]]]];
 const KEYS=["x1","x2","x3","x4","x5","x6"].concat(Array.from({length:18},(_,i)=>i+1));
 const lab=k=>typeof k==="string"?"?"+k.slice(1):String(k);
 let showC=false;
 const YD=COURSE.mpp*1.0936133;
+(()=>{const sel=document.getElementById("courseSel");Object.values(COURSES).forEach(c=>{const o=document.createElement("option");o.value=c.id;o.textContent=c.name;sel.appendChild(o)});
+  sel.value=CID;sel.onchange=()=>{location.hash=sel.value};
+  window.addEventListener("hashchange",()=>location.reload());})();
 const $=id=>document.getElementById(id);
 const cv=$("cv"),ctx=cv.getContext("2d"),stage=$("stage");
 const img=new Image();
@@ -133,7 +140,7 @@ function line(p,color,w,dash){ctx.beginPath();p.forEach((q,i)=>{const[s0,s1]=toS
 function draw(){
   ctx.setTransform(dpr,0,0,dpr,0,0);const r=stage.getBoundingClientRect();ctx.fillStyle="#0d120b";ctx.fillRect(0,0,r.width,r.height);
   if(img.complete&&img.width){ctx.imageSmoothingEnabled=view.s<2;ctx.drawImage(img,view.x,view.y,img.width*view.s,img.height*view.s)}
-  if(showC)CANDS.forEach(([id,p])=>{line(p,"rgba(0,40,60,.55)",6);line(p,"#7fe3ff",3);const m=p[Math.floor(p.length/2)];label(id,toScr(m),"#7fe3ff","#06303d",0)});
+  if(showC&&CID==="gazan")CANDS.forEach(([id,p])=>{line(p,"rgba(0,40,60,.55)",6);line(p,"#7fe3ff",3);const m=p[Math.floor(p.length/2)];label(id,toScr(m),"#7fe3ff","#06303d",0)});
   // other holes
   KEYS.forEach(n=>{if(n===cur)return;const p=pts(n);if(p.length<1)return;
     line(p,"rgba(0,0,0,.55)",5);line(p,"rgba(255,255,255,.85)",2.5,[6,5]);
@@ -177,6 +184,7 @@ $("clear").onclick=()=>{$("btns").hidden=true;$("confirm").hidden=false};
 $("no").onclick=()=>{$("btns").hidden=false;$("confirm").hidden=true};
 $("yes").onclick=()=>{holes[cur]={pts:[],memo:""};$("memo").value="";$("btns").hidden=false;$("confirm").hidden=true;changed()};
 $("next").onclick=()=>{const i=KEYS.indexOf(cur);select(KEYS[(i+1)%KEYS.length])};
+if(CID!=="gazan")$("ctog").hidden=true;
 $("ctog").onclick=()=>{showC=!showC;$("ctog").textContent=showC?"認識済み 表示中":"認識済み 非表示";draw()};
 $("memo").addEventListener("input",()=>{holes[cur]=holes[cur]||{pts:[],memo:""};holes[cur].memo=$("memo").value;dirty.add(cur);schedule()});
 function changed(){dirty.add(cur);info();chips();draw();schedule()}
