@@ -415,6 +415,12 @@
   .habit-tips li:first-child{border-top:none}
   .habit-tips li::before{content:"●";position:absolute;left:4px;top:7px;font-size:9px;color:var(--mint)}
   .habit-sec{font-size:12.5px;color:var(--sub);margin:14px 0 2px;font-weight:700}
+  .measure{margin-top:8px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);font-size:12.5px;line-height:1.7;color:var(--sub)}
+  .measure:empty{display:none}
+  .measure b{color:#eaf3ee}
+  .measure .pl{color:#ffd23f;font-weight:800}
+  .measure .mh{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px}
+  .measure .mh button{font-size:11px;padding:3px 10px;border-radius:9px;border:1px solid rgba(255,255,255,.18);background:none;color:var(--sub);cursor:pointer}
   .elevprof{margin-top:10px}
   .elevprof:empty{display:none}
   .elevprof .ep-h{display:flex;align-items:baseline;gap:8px;font-size:12px;color:var(--sub);margin-bottom:2px;flex-wrap:wrap}
@@ -545,6 +551,7 @@
         <div class="lb-msg" id="cMsg">ラウンド計測を開始すると、心拍から今の緊張度とアドバイスを表示します。</div>
       </div>
       <svg id="courseSvg" viewBox="0 0 340 560" xmlns="http://www.w3.org/2000/svg" style="margin-top:10px"></svg>
+      <div class="measure" id="measureBox"></div>
       <div class="elevprof" id="elevProf"></div>
       <div class="shotpanel" id="shotPanel" style="display:none">
         <div class="sp-head"><b id="spHole"></b><span id="spHint"></span></div>
@@ -1333,6 +1340,29 @@ function elevAt(h,pt){
   for(let i=1;i<p.length;i++)if(s<=p[i][0]){const u=(s-p[i-1][0])/((p[i][0]-p[i-1][0])||1);return p[i-1][1]+(p[i][1]-p[i-1][1])*u;}
   return p[p.length-1][1];
 }
+// 高低差を入れた「実際に打つ距離」：打ち上げは長く、打ち下ろしは短く（1mで約ELEV_YD yd）
+function playsLike(h,from,to){
+  const d=Math.hypot(to[0]-from[0],to[1]-from[1]);
+  const dz=(h.eg||h.elev)?elevAt(h,to)-elevAt(h,from):0;
+  return{d:Math.round(d),dz:Math.round(dz*10)/10,p:Math.round(d+dz*ELEV_YD)};}
+function plTxt(r){
+  if(Math.abs(r.p-r.d)<2)return`<b>${r.d}yd</b>（高低差ほぼなし）`;
+  return`${r.d}yd → 実際は <span class="pl">${r.p}yd</span>（${r.dz>0?"打ち上げ":"打ち下ろし"}${Math.abs(r.dz).toFixed(1)}m）`;}
+// 実際に打つ距離に合う番手（自分の平均飛距離から。データが3球以上ある番手だけ）
+function clubFor(yd){let best=null;
+  CLUBS.forEach(c=>{const st=stats(c);if(!st||st.n<3)return;const e=Math.abs(st.dist-yd);if(!best||e<best.e)best={c,e,d:Math.round(st.dist)};});
+  return best&&best.e<=20?best:null;}
+let measurePt=null;
+function renderMeasure(h){
+  const box=$("measureBox");if(!box)return;
+  if(curRound){const hr=holeRec(curRound,h.n);if(hr.done||onGreen(hr)){box.innerHTML="";return;}
+    const r=playsLike(h,ballPos(hr),greenPos(h)),cf=clubFor(r.p);
+    box.innerHTML=`<div class="mh"><b>⛳ ピンまで</b></div>${plTxt(r)}${cf?`<br>あなたの平均だと <b>${cf.c}</b>（${cf.d}yd）`:""}`;return;}
+  if(!measurePt){box.innerHTML=(h.eg||h.elev)?`<span>📏 マップをタップすると、そこまでの距離と、高低差を入れた「実際に打つ距離」が出ます。</span>`:"";return;}
+  const T=h.line[0],G=greenPos(h),a=playsLike(h,T,measurePt),b=playsLike(h,measurePt,G),cb=clubFor(b.p);
+  box.innerHTML=`<div class="mh"><b>📏 距離をはかる</b><button type="button" id="mClear">消す</button></div>
+  ティーから：${plTxt(a)}<br>そこからピンまで：${plTxt(b)}${cb?`<br>2打目はあなたの平均だと <b>${cb.c}</b>（${cb.d}yd）`:""}`;
+  $("mClear").onclick=e=>{e.stopPropagation();measurePt=null;drawCourse();};}
 const inArea=(h,pt)=>h.areas.some(a=>pip(pt,a.p));
 HOLES.forEach(h=>{const xs=h.line.map(q=>q[0]),ys=h.line.map(q=>q[1]);
   h.vb=[Math.min(...xs)-CW-6,Math.max(...xs)+CW+6,Math.min(...ys)-CW*0.6,Math.max(...ys)+CW*0.8];
@@ -1419,7 +1449,7 @@ function renderElevProf(h){
   let tk="";for(let d=100;d<L-20;d+=100)tk+=`<line x1="${X(d)}" x2="${X(d)}" y1="${pt}" y2="${H-pb}" stroke="rgba(255,255,255,.07)"/><text x="${X(d)}" y="${H-6}" text-anchor="middle" font-size="9" fill="#8ea69a">${d}</text>`;
   const zl=z=>`<line x1="${pl}" x2="${W-pr}" y1="${Y(z)}" y2="${Y(z)}" stroke="rgba(255,255,255,${z===0?.25:.08})" ${z===0?'stroke-dasharray="3 3"':""}/><text x="${pl-4}" y="${Y(z)+3}" text-anchor="end" font-size="9" fill="#8ea69a">${z>0?"+":""}${z}m</text>`;
   let zt="";const zstep=rng>8?4:rng>4?2:1;for(let z=Math.ceil(mn/zstep)*zstep;z<=mx;z+=zstep)zt+=zl(z);
-  box.innerHTML=`<div class="ep-h"><b>⛰ 高低差</b><span>グリーンはティーより${gtxt}</span></div>
+  box.innerHTML=`<div class="ep-h"><b>⛰ 高低差</b><span>グリーンはティーより${gtxt}${Math.abs(gz*ELEV_YD)>=2?`・実際は <b style="color:#ffd23f">${Math.round(L+gz*ELEV_YD)}yd</b>のホール`:""}</span></div>
   <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="ティーからグリーンまでの高低差">
    <defs><linearGradient id="gEp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c6ff4a" stop-opacity=".45"/><stop offset="1" stop-color="#3ee68a" stop-opacity=".05"/></linearGradient></defs>
    ${zt}${tk}<path d="${area}" fill="url(#gEp)"/><path d="${line}" fill="none" stroke="#c6ff4a" stroke-width="2" stroke-linejoin="round"/>
@@ -1429,7 +1459,8 @@ function renderElevProf(h){
 }
 function drawCourse(){
   const h=HOLES[curHole-1];
-  renderElevProf(h);
+  if(measurePt&&measurePt.hole!==h.n)measurePt=null;
+  renderElevProf(h);renderMeasure(h);
   const W=340,pad=12,maxH=600;
   const[x0,x1,y0,y1]=h.vb;
   const s=Math.min((W-2*pad)/(x1-x0),(maxH-2*pad)/(y1-y0));
@@ -1507,7 +1538,18 @@ function drawCourse(){
     courseSvg.appendChild(el("circle",{cx:X,cy:Y,r:2.6,fill:"#fff"}));
     courseSvg.appendChild(el("rect",{x:X+6,y:Y-7,width:24,height:14,rx:7,fill:"rgba(4,14,9,.7)",stroke:"rgba(255,255,255,.25)"}));
     const t=el("text",{x:X+18,y:Y+3.2,"font-size":8.5,fill:"#fff","font-weight":800,"text-anchor":"middle"});t.textContent=r;courseSvg.appendChild(t);
+    // 高低差で実際の距離が3yd以上ちがうときは、横に「実際に打つ距離」を出す
+    const pl=playsLike(h,p,h.line[h.line.length-1]);
+    if(Math.abs(pl.p-pl.d)>=3){courseSvg.appendChild(el("rect",{x:X+32,y:Y-7,width:34,height:14,rx:7,fill:"rgba(255,210,63,.92)"}));
+      const t2=el("text",{x:X+49,y:Y+3.2,"font-size":8,fill:"#2a2104","font-weight":800,"text-anchor":"middle"});t2.textContent=`実${pl.p}`;courseSvg.appendChild(t2);}
   });
+  if(measurePt&&!curRound){const T=h.line[0],G=h.line[h.line.length-1],m=measurePt,mx=view.X(m[0]),my=view.Y(m[1]);
+    [[T,m],[m,G]].forEach(([a,b])=>courseSvg.appendChild(el("line",{x1:view.X(a[0]),y1:view.Y(a[1]),x2:view.X(b[0]),y2:view.Y(b[1]),stroke:"#ffd23f","stroke-width":2,"stroke-dasharray":"5 4","stroke-linecap":"round"})));
+    courseSvg.appendChild(el("circle",{cx:mx,cy:my,r:7,fill:"none",stroke:"#ffd23f","stroke-width":2.5}));
+    courseSvg.appendChild(el("circle",{cx:mx,cy:my,r:2.5,fill:"#ffd23f"}));
+    const a=playsLike(h,T,m),b=playsLike(h,m,G),lab=(x,y,r)=>{const w=r.p!==r.d?62:34;courseSvg.appendChild(el("rect",{x:x-w/2,y:y-8,width:w,height:16,rx:8,fill:"rgba(4,14,9,.82)",stroke:"#ffd23f","stroke-width":1}));
+      const tt=el("text",{x,y:y+3.5,"font-size":9,fill:"#fff","font-weight":800,"text-anchor":"middle"});tt.textContent=r.p!==r.d?`${r.d}→実${r.p}`:`${r.d}yd`;courseSvg.appendChild(tt);};
+    lab((view.X(T[0])+mx)/2+30,(view.Y(T[1])+my)/2,a);lab((mx+view.X(G[0]))/2+30,(my+view.Y(G[1]))/2,b);}
   // ティー・ピン
   const T=h.line[0],Gp=h.line[h.line.length-1];
   const tx0=view.X(T[0]),ty0=view.Y(T[1]);
@@ -1865,9 +1907,9 @@ CLUBS.forEach(c=>{const b=document.createElement("button");b.textContent=c;b.onc
 
 /* ---------- マップをタップして記録 ---------- */
 courseSvg.addEventListener("click",ev=>{
-  if(!curRound){toast("「ラウンド開始」を押すとショットを記録できます");return;}
   if(!view||!view.inv)return;
   const p=svgPoint(courseSvg,ev);
+  if(!curRound){const q=view.inv(p.x,p.y);measurePt=[q[0],q[1]];measurePt.hole=HOLES[curHole-1].n;drawCourse();return;}
   recordShot(view.inv(p.x,p.y));
 });
 function recordShot(q){
