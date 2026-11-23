@@ -30,6 +30,8 @@ h1{font-family:var(--f-num);font-size:17px;margin:0;letter-spacing:.02em}
 .chip{flex:0 0 auto;min-width:38px;height:34px;border-radius:17px;border:1px solid var(--line);background:var(--chip);
   color:var(--fg);font-family:var(--f-num);font-size:15px;font-weight:600;cursor:pointer;position:relative}
 .chip.done::after{content:"";position:absolute;right:3px;top:3px;width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.chip.q{border-style:dashed}
+.ctog{position:absolute;left:calc(10px + env(safe-area-inset-left,0px));bottom:10px;height:34px;padding:0 12px;border-radius:17px;border:none;background:rgba(6,48,61,.85);color:#7fe3ff;font-family:var(--f-ui);font-size:12px;font-weight:600;cursor:pointer}
 .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .stage{flex:1;position:relative;min-height:0;background:#0d120b;touch-action:none}
 canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
@@ -62,8 +64,9 @@ textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-ra
   </header>
   <div class="stage" id="stage">
     <canvas id="cv"></canvas>
-    <div class="hint" id="hint">タップで点を置く：<b>ティー → 曲がり角 → グリーン</b> の順。指1本で移動、2本で拡大。</div>
+    <div class="hint" id="hint"><span style="color:#7fe3ff">水色の線</span>は認識できたホール。<b>それ以外</b>のホールを、ティー → 曲がり角 → グリーンの順にタップ。番号が分からなければ「?」の枠に。</div>
     <div class="zoom"><button id="zin" aria-label="拡大">＋</button><button id="zout" aria-label="縮小">－</button><button id="zfit" aria-label="全体" style="font-size:13px">全体</button></div>
+    <button id="ctog" class="ctog">認識済み 表示中</button>
   </div>
   <footer>
     <div class="info">
@@ -85,12 +88,16 @@ textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-ra
 <script>
 const COURSE={id:"gazan",name:"倶楽部我山",img:"gazan.jpg",mpp:0.9633804138343002,
   card:[[4,405],[5,541],[3,188],[4,418],[4,395],[4,350],[5,528],[3,135],[4,377],[4,365],[5,459],[3,182],[4,430],[4,341],[5,509],[3,155],[4,313],[4,355]]};
+const CANDS=[["A",[[1104,363],[1048,338],[993,309],[936,287]]],["B",[[1346,516],[1272,477],[1197,436],[1121,401]]],["C",[[1333,569],[1241,532],[1154,500],[1064,462]]],["D",[[1064,531],[1389,663]]],["E",[[715,498],[774,591],[830,680],[889,773]]],["F",[[894,446],[919,592],[968,735],[1009,884]]],["G",[[655,534],[708,622],[750,713],[809,800]]],["H",[[1420,744],[1319,706],[1216,663],[1121,623]]],["I",[[596,560],[622,656],[640,745],[655,850]]],["J",[[1047,665],[1067,729],[1078,791],[1101,852]]],["K",[[514,771],[495,890],[485,1005],[472,1129]]],["L",[[710,902],[659,961],[609,1021],[554,1078]]],["M",[[257,881],[249,998],[236,1113],[218,1231]]],["N",[[314,954],[321,1035],[342,1113],[339,1199]]],["O",[[621,1169],[501,1253],[371,1296],[238,1349]]],["P",[[161,1224],[131,1262],[109,1306],[74,1342]]]];
+const KEYS=["x1","x2","x3","x4","x5","x6"].concat(Array.from({length:18},(_,i)=>i+1));
+const lab=k=>typeof k==="string"?"?"+k.slice(1):String(k);
+let showC=true;
 const YD=COURSE.mpp*1.0936133;
 const $=id=>document.getElementById(id);
 const cv=$("cv"),ctx=cv.getContext("2d"),stage=$("stage");
 const img=new Image();
 let holes={};          // n -> {pts:[[x,y]..], memo}
-let cur=1, view={s:1,x:0,y:0}, dpr=1, db=null, saveTimer=null, dirty=new Set();
+let cur="x1", view={s:1,x:0,y:0}, dpr=1, db=null, saveTimer=null, dirty=new Set();
 
 function status(t,ok){const s=$("status");s.textContent=t;s.classList.toggle("ok",!!ok)}
 function pts(n){return (holes[n]&&holes[n].pts)||[]}
@@ -98,18 +105,18 @@ function lenYd(p){let d=0;for(let i=1;i<p.length;i++)d+=Math.hypot(p[i][0]-p[i-1
 
 function chips(){
   const c=$("chips");c.innerHTML="";
-  for(let n=1;n<=18;n++){const b=document.createElement("button");b.className="chip"+(n===cur?" on":"")+(pts(n).length>=2?" done":"");
-    b.textContent=n;b.id="chip"+n;b.onclick=()=>select(n);c.appendChild(b)}
+  KEYS.forEach(n=>{const b=document.createElement("button");b.className="chip"+(n===cur?" on":"")+(pts(n).length>=2?" done":"")+(typeof n==="string"?" q":"");
+    b.textContent=lab(n);b.id="chip"+n;b.onclick=()=>select(n);c.appendChild(b)})
 }
 function select(n){flush();cur=n;$("memo").value=(holes[n]&&holes[n].memo)||"";chips();info();draw();
   const ch=$("chip"+n);ch&&ch.scrollIntoView({inline:"center",block:"nearest",behavior:"smooth"});
   const p=pts(n);if(p.length)focusOn(p)}
 function info(){
-  const [par,yd]=COURSE.card[cur-1];$("hNo").textContent=cur;$("hPar").textContent="Par"+par;$("hCard").textContent=yd;
+  const q=typeof cur==="string";const [par,yd]=q?["",0]:COURSE.card[cur-1];$("hNo").textContent=q?"番号不明 "+lab(cur):cur;$("hPar").textContent=q?"":"Par"+par;$("hCard").textContent=q?"-":yd;
   const L=lenYd(pts(cur));$("hLen").textContent=L;const d=$("hDiff");
-  if(pts(cur).length<2){d.textContent="";d.className="diff"}
+  if(pts(cur).length<2||q){d.textContent="";d.className="diff"}
   else{const df=L-yd;d.textContent=(df>=0?"+":"")+df+" yd";d.className="diff "+(Math.abs(df)<=40?"good":"bad")}
-  $("undo").disabled=!pts(cur).length;$("clear").disabled=!pts(cur).length;$("next").textContent=cur<18?"次のホールへ":"1番へ";
+  $("undo").disabled=!pts(cur).length;$("clear").disabled=!pts(cur).length;const i=KEYS.indexOf(cur);$("next").textContent=i<KEYS.length-1?"次へ ("+lab(KEYS[i+1])+")":"最初へ";
 }
 
 /* ---------- drawing ---------- */
@@ -126,10 +133,11 @@ function line(p,color,w,dash){ctx.beginPath();p.forEach((q,i)=>{const[s0,s1]=toS
 function draw(){
   ctx.setTransform(dpr,0,0,dpr,0,0);const r=stage.getBoundingClientRect();ctx.fillStyle="#0d120b";ctx.fillRect(0,0,r.width,r.height);
   if(img.complete&&img.width){ctx.imageSmoothingEnabled=view.s<2;ctx.drawImage(img,view.x,view.y,img.width*view.s,img.height*view.s)}
+  if(showC)CANDS.forEach(([id,p])=>{line(p,"rgba(0,40,60,.55)",6);line(p,"#7fe3ff",3);const m=p[Math.floor(p.length/2)];label(id,toScr(m),"#7fe3ff","#06303d",0)});
   // other holes
-  for(let n=1;n<=18;n++){if(n===cur)continue;const p=pts(n);if(p.length<1)continue;
+  KEYS.forEach(n=>{if(n===cur)return;const p=pts(n);if(p.length<1)return;
     line(p,"rgba(0,0,0,.55)",5);line(p,"rgba(255,255,255,.85)",2.5,[6,5]);
-    const g=toScr(p[p.length-1]);label(n,g,"rgba(255,255,255,.92)","#1d2a17")}
+    const g=toScr(p[p.length-1]);label(lab(n),g,"rgba(255,255,255,.92)","#1d2a17")})
   const p=pts(cur);
   if(p.length){line(p,"rgba(0,0,0,.6)",7);line(p,"#ffd23f",3.5);
     p.forEach((q,i)=>{const[s0,s1]=toScr(q);const last=i===p.length-1&&p.length>1;
@@ -137,9 +145,9 @@ function draw(){
       if(i===0){ctx.fillStyle="#111";ctx.font="bold 10px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("T",s0,s1+.5)}
       if(last){ctx.beginPath();ctx.moveTo(s0,s1);ctx.lineTo(s0,s1-26);ctx.strokeStyle="#111";ctx.lineWidth=2;ctx.stroke();
         ctx.beginPath();ctx.moveTo(s0,s1-26);ctx.lineTo(s0+14,s1-21);ctx.lineTo(s0,s1-16);ctx.fillStyle="#d8352a";ctx.fill()}});
-    label(cur,toScr(p[0]),"#ffd23f","#111",-22)}
+    label(lab(cur),toScr(p[0]),"#ffd23f","#111",-22)}
 }
-function label(n,[x,y],bg,fg,dy){dy=dy||-20;ctx.font="bold 13px 'Space Grotesk',sans-serif";const w=ctx.measureText(n).width+12;
+function label(n,[x,y],bg,fg,dy){dy=dy??-20;ctx.font="bold 13px 'Space Grotesk',sans-serif";const w=ctx.measureText(n).width+12;
   ctx.fillStyle=bg;ctx.beginPath();ctx.roundRect(x-w/2,y+dy-10,w,20,10);ctx.fill();ctx.fillStyle=fg;ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(n,x,y+dy)}
 
 /* ---------- touch: tap = point, drag = pan, pinch = zoom ---------- */
@@ -168,7 +176,8 @@ $("undo").onclick=()=>{if(pts(cur).length){holes[cur].pts.pop();changed()}};
 $("clear").onclick=()=>{$("btns").hidden=true;$("confirm").hidden=false};
 $("no").onclick=()=>{$("btns").hidden=false;$("confirm").hidden=true};
 $("yes").onclick=()=>{holes[cur]={pts:[],memo:""};$("memo").value="";$("btns").hidden=false;$("confirm").hidden=true;changed()};
-$("next").onclick=()=>select(cur<18?cur+1:1);
+$("next").onclick=()=>{const i=KEYS.indexOf(cur);select(KEYS[(i+1)%KEYS.length])};
+$("ctog").onclick=()=>{showC=!showC;$("ctog").textContent=showC?"認識済み 表示中":"認識済み 非表示";draw()};
 $("memo").addEventListener("input",()=>{holes[cur]=holes[cur]||{pts:[],memo:""};holes[cur].memo=$("memo").value;dirty.add(cur);schedule()});
 function changed(){dirty.add(cur);info();chips();draw();schedule()}
 
@@ -177,7 +186,7 @@ function schedule(){clearTimeout(saveTimer);status(db?"保存待ち…":"この�
 let saving=Promise.resolve();
 function flush(){clearTimeout(saveTimer);if(!db||!dirty.size)return;const list=[...dirty];dirty.clear();
   saving=saving.then(async()=>{status("保存中…");try{for(const n of list){const h=holes[n]||{pts:[],memo:""};
-      await db.collection("courses/"+COURSE.id+"/holes").doc(String(n).padStart(2,"0")).set({n,pts:h.pts,memo:h.memo||"",lenYd:lenYd(h.pts),imgW:img.width,imgH:img.height,updated:new Date().toISOString()})}
+      await db.collection("courses/"+COURSE.id+"/holes").doc(typeof n==="string"?n:String(n).padStart(2,"0")).set({n,pts:h.pts,memo:h.memo||"",lenYd:lenYd(h.pts),imgW:img.width,imgH:img.height,updated:new Date().toISOString()})}
     status("保存しました",true)}catch(e){list.forEach(n=>dirty.add(n));status(e&&e.code==="invalid_argument"?"保存する権限がありません":"保存できませんでした。もう一度触ると再保存します")}})}
 
 async function connect(){
@@ -185,7 +194,7 @@ async function connect(){
   if(!db){status("この画面では保存できません");return}
   const t=setTimeout(()=>status("保存先につながりません…"),10000);
   db.collection("courses/"+COURSE.id+"/holes").onSnapshot(snap=>{clearTimeout(t);
-    snap.docs.forEach(d=>{const v=d.data();const n=+v.n;if(!n||dirty.has(n))return;holes[n]={pts:(v.pts||[]).map(q=>[q[0],q[1]]),memo:v.memo||""}});
+    snap.docs.forEach(d=>{const v=d.data();const n=typeof v.n==="string"?v.n:+v.n;if(!KEYS.includes(n)||dirty.has(n))return;holes[n]={pts:(v.pts||[]).map(q=>[q[0],q[1]]),memo:v.memo||""}});
     if(document.activeElement!==$("memo"))$("memo").value=(holes[cur]&&holes[cur].memo)||"";
     chips();info();draw();if(!snap.metadata.fromCache)status(Object.keys(holes).length?"保存済みの線を読み込みました":"まだ線はありません。1番からなぞってください",true)},
     e=>{clearTimeout(t);status("保存先に接続できませんでした")});
