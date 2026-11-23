@@ -62,6 +62,50 @@ def frame(line_px, mpp):
 SMOOTH_M = {"P": 6.0, "W": 3.0, "A": 2.5, "F": 3.0, "B": 0.9}   # 種類ごとのなめらかさ（ぼかしの強さ m）
 
 
+def inv_frame(lp, mpp):
+    """アプリの座標（ヤード） → ピクセル"""
+    t, g = np.array(lp[0], float), np.array(lp[-1], float)
+    v = (g - t) * [1, -1]
+    u = v / np.linalg.norm(v)
+    r = np.array([u[1], -u[0]])
+    def inv(X, Y):
+        d = (np.multiply.outer(X, r) + np.multiply.outer(Y, u)) * YD / mpp   # 北が+y
+        return t[0] + d[..., 0], t[1] - d[..., 1]
+    return inv
+
+
+EG_STEP = 8   # 標高の網の目の間隔（yd）
+
+
+def elev_grid(dem, lp, mpp, L):
+    """ホールのまわりの標高（ティーからの差、0.1m単位）を網の目で返す。アプリの座標（ヤード）"""
+    inv = inv_frame(lp, mpp)
+    xs = np.arange(-88, 88 + 1e-6, EG_STEP)
+    ys = np.arange(-40, L + 48 + 1e-6, EG_STEP)
+    X, Y = np.meshgrid(xs, ys)
+    px, py = inv(X, Y)
+    z = cv2.remap(dem, px.astype(np.float32), py.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    t0 = cv2.remap(dem, np.float32([[lp[0][0]]]), np.float32([[lp[0][1]]]), cv2.INTER_LINEAR)[0, 0]
+    dz = np.round((z - t0) * 10).astype(int)
+    return f"E{xs[0]:g},{ys[0]:g},{EG_STEP},{len(xs)},{len(ys)}:" + ",".join(map(str, dz.ravel())), t0
+
+
+def elev_profile(dem, lp, mpp):
+    """線に沿った高低差（ティーから、m）。アプリの elev 形式 [[割合, m], ...]"""
+    seg = [math.dist(lp[i], lp[i + 1]) for i in range(len(lp) - 1)]
+    tot = sum(seg)
+    out = []
+    for s_ in np.linspace(0, 1, 11):
+        rest, q = s_ * tot, None
+        for i in range(len(seg)):
+            if rest <= seg[i] + 1e-9:
+                q = np.array(lp[i], float) + (np.array(lp[i + 1], float) - np.array(lp[i], float)) * (rest / (seg[i] or 1)); break
+            rest -= seg[i]
+        q = np.array(lp[-1], float) if q is None else q
+        out.append(float(cv2.remap(dem, np.float32([[q[0]]]), np.float32([[q[1]]]), cv2.INTER_LINEAR)[0, 0]))
+    return [[round(float(s_), 2), round(v - out[0], 1)] for s_, v in zip(np.linspace(0, 1, 11), out)]
+
+
 def polys(mask, eps_m, min_m2, mpp, tf, prefix):
     # ギザギザを消すため、マスクを少しぼかしてから輪郭をとる（細かい点で残し、アプリ側でも曲線で描く）
     sm = SMOOTH_M.get(prefix, 1.5) / mpp
@@ -136,6 +180,9 @@ def build(wd):
     tees = spec["tees"]
     deft = next(t for t in tees if t["id"] == spec["defTee"])
     lines, sheets, report = [], [], []
+    dem_f = os.path.join(wd, "dem.npy")
+    dem = np.load(dem_f).astype(np.float32) if os.path.exists(dem_f) else None
+    profiles = {}
     corr_px = int(CW_YD * YD / mpp)
     for h in sorted(spec["holes"], key=lambda h: h["n"]):
         n = h["n"]
@@ -282,7 +329,11 @@ def build(wd):
         feats.append("G" + " ".join(f"{round(gx + rg * math.cos(a))},{round(gy + rg * 0.85 * math.sin(a))}" for a in np.linspace(0, 2 * math.pi, 14, endpoint=False)))
         ln = [tf(q) for q in lp]
         L = sum(math.dist(ln[i], ln[i + 1]) for i in range(len(ln) - 1))
-        lines.append(f"{n};{h['par']};{deft['yd'][n - 1]};{round(L)};" + " ".join(f"{round(x)},{round(y)}" for x, y in ln) + ";" + "|".join(feats) + (";" + ctx_str if ctx_str else ""))
+        eg = ""
+        if dem is not None:
+            eg, _ = elev_grid(dem, lp, mpp, L)
+            profiles[n] = elev_profile(dem, lp, mpp)
+        lines.append(f"{n};{h['par']};{deft['yd'][n - 1]};{round(L)};" + " ".join(f"{round(x)},{round(y)}" for x, y in ln) + ";" + "|".join(feats) + ";" + ctx_str + (";" + eg if eg else ""))
         # 確認用：航空写真に線と番号
         cv2.polylines(check, [np.array(lp, np.int32)], False, (0, 255, 255), 3)
         cv2.circle(check, tuple(lp[0]), 7, (255, 255, 255), -1)
@@ -295,6 +346,9 @@ def build(wd):
     for k in ["notes", "noteSrc", "elev"]:
         if k in spec:
             entry[k] = spec[k]
+    if profiles and "elev" not in spec:
+        entry["elev"] = [profiles[k] for k in sorted(profiles)]
+        entry["elevNote"] = "高低差は国土地理院の標高データ（5mメッシュ）から"
     json.dump({"entry": entry, "raw": raw}, open(os.path.join(wd, "course.json"), "w"), ensure_ascii=False, indent=1)
     s = min(1.0, 1400 / check.shape[1])
     cv2.imwrite(os.path.join(wd, "check.jpg"), cv2.resize(check, None, fx=s, fy=s), [cv2.IMWRITE_JPEG_QUALITY, 85])
