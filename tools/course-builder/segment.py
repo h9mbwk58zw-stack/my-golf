@@ -109,7 +109,7 @@ def sand_hi(im18, mpp18):
     r = max(2, int(2.5 / mpp18))
     keep = []
     for i, sl in enumerate(ndi.find_objects(lab_), 1):
-        if not (6 < sz[i - 1] < 6000):
+        if not (6 < sz[i - 1] < 1500):  # 1500m²より大きい砂地は造成地・資材置き場
             continue
         y0, y1 = max(0, sl[0].start - r - 2), sl[0].stop + r + 2
         x0, x1 = max(0, sl[1].start - r - 2), sl[1].stop + r + 2

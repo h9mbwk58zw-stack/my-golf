@@ -175,7 +175,8 @@ def build(wd):
     spec = json.load(open(os.path.join(wd, "holes.json")))
     M = dict(np.load(os.path.join(wd, "masks.npz")))
     mpp = meta["mpp"]
-    im = cv2.imread(os.path.join(wd, "aerial.jpg"))
+    mf = os.path.join(wd, "aerial_matched.jpg")  # もや補正した写真があれば確認画像はそちらで
+    im = cv2.imread(mf if os.path.exists(mf) else os.path.join(wd, "aerial.jpg"))
     check = im.copy()
     tees = spec["tees"]
     deft = next(t for t in tees if t["id"] == spec["defTee"])
