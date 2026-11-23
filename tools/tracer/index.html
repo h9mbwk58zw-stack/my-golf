@@ -64,9 +64,9 @@ textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-ra
   </header>
   <div class="stage" id="stage">
     <canvas id="cv"></canvas>
-    <div class="hint" id="hint"><span style="color:#7fe3ff">水色の線</span>は認識できたホール。<b>それ以外</b>のホールを、ティー → 曲がり角 → グリーンの順にタップ。番号が分からなければ「?」の枠に。</div>
+    <div class="hint" id="hint">上で番号を選んで、<b>ティー → 曲がり角 → グリーン</b>の順にタップ。番号が分からなければ「?」の枠に。指1本で移動、2本で拡大。</div>
     <div class="zoom"><button id="zin" aria-label="拡大">＋</button><button id="zout" aria-label="縮小">－</button><button id="zfit" aria-label="全体" style="font-size:13px">全体</button></div>
-    <button id="ctog" class="ctog">認識済み 表示中</button>
+    <button id="ctog" class="ctog">認識済み 非表示</button>
   </div>
   <footer>
     <div class="info">
@@ -91,13 +91,13 @@ const COURSE={id:"gazan",name:"倶楽部我山",img:"gazan.jpg",mpp:0.9633804138
 const CANDS=[["A",[[1104,363],[1048,338],[993,309],[936,287]]],["B",[[1346,516],[1272,477],[1197,436],[1121,401]]],["C",[[1333,569],[1241,532],[1154,500],[1064,462]]],["D",[[1064,531],[1389,663]]],["E",[[715,498],[774,591],[830,680],[889,773]]],["F",[[894,446],[919,592],[968,735],[1009,884]]],["G",[[655,534],[708,622],[750,713],[809,800]]],["H",[[1420,744],[1319,706],[1216,663],[1121,623]]],["I",[[596,560],[622,656],[640,745],[655,850]]],["J",[[1047,665],[1067,729],[1078,791],[1101,852]]],["K",[[514,771],[495,890],[485,1005],[472,1129]]],["L",[[710,902],[659,961],[609,1021],[554,1078]]],["M",[[257,881],[249,998],[236,1113],[218,1231]]],["N",[[314,954],[321,1035],[342,1113],[339,1199]]],["O",[[621,1169],[501,1253],[371,1296],[238,1349]]],["P",[[161,1224],[131,1262],[109,1306],[74,1342]]]];
 const KEYS=["x1","x2","x3","x4","x5","x6"].concat(Array.from({length:18},(_,i)=>i+1));
 const lab=k=>typeof k==="string"?"?"+k.slice(1):String(k);
-let showC=true;
+let showC=false;
 const YD=COURSE.mpp*1.0936133;
 const $=id=>document.getElementById(id);
 const cv=$("cv"),ctx=cv.getContext("2d"),stage=$("stage");
 const img=new Image();
 let holes={};          // n -> {pts:[[x,y]..], memo}
-let cur="x1", view={s:1,x:0,y:0}, dpr=1, db=null, saveTimer=null, dirty=new Set();
+let cur=1, view={s:1,x:0,y:0}, dpr=1, db=null, saveTimer=null, dirty=new Set();
 
 function status(t,ok){const s=$("status");s.textContent=t;s.classList.toggle("ok",!!ok)}
 function pts(n){return (holes[n]&&holes[n].pts)||[]}
