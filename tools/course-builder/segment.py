@@ -123,6 +123,39 @@ def sand_hi(im18, mpp18):
     return np.isin(lab_, keep)
 
 
+def forest_score(im):
+    """森らしさ：細かいでこぼこ（木のこずえ）が多く、暗いほど高い"""
+    g = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    lap = np.abs(cv2.Laplacian(cv2.GaussianBlur(g, (0, 0), 0.8), cv2.CV_32F, ksize=3))
+    V = cv2.blur(cv2.cvtColor(im, cv2.COLOR_BGR2HSV)[..., 2].astype(np.float32), (21, 21))
+    return cv2.blur(lap, (21, 21)) / np.maximum(V / 120, 0.2)
+
+
+def course_open(im, seed, mpp):
+    """見つかった芝から、森ではない開けた場所を広げてコース全体をとらえる。
+    コースの外周はたいてい濃い森なので、森との境目で止まる"""
+    from skimage.filters import threshold_otsu
+    sc = forest_score(im)
+    roi = ndi.binary_dilation(seed, iterations=int(120 / mpp))
+    if not roi.any():
+        return np.zeros_like(seed), sc
+    T = threshold_otsu(sc[roi])
+    op = ndi.binary_opening(sc < T, iterations=3)
+    lab, n = ndi.label(op)
+    ids = np.unique(lab[seed & op]); ids = ids[ids > 0]
+    if not len(ids):
+        return np.zeros_like(seed), sc
+    cnt = ndi.sum(seed & op, lab, ids); tot = ndi.sum(op, lab, ids)
+    course = np.isin(lab, ids[(cnt > 200 / mpp ** 2) & (cnt / tot > 0.05)])
+    course = ndi.binary_fill_holes(ndi.binary_closing(course, iterations=4))
+    # 一番大きなまとまりから離れたもの（畑・隣のゴルフ場）は外す
+    grp, k = ndi.label(ndi.binary_dilation(course, iterations=int(30 / mpp)))
+    if k > 1:
+        sz = ndi.sum(course, grp, range(1, k + 1))
+        course &= grp == 1 + int(np.argmax(sz))
+    return course, sc
+
+
 def preview(im, M):
     vis = np.full_like(im, (36, 33, 30))
     vis[M["area"]] = (40, 95, 40)
@@ -145,6 +178,24 @@ if __name__ == "__main__":
         im = match_color(im)
         cv2.imwrite(os.path.join(wd, "aerial_matched.jpg"), im, [cv2.IMWRITE_JPEG_QUALITY, 90])
     M = segment(im)
+    meta = json.load(open(os.path.join(wd, "meta.json")))
+    op, _ = course_open(im, M["turf"], meta["mpp"])
+    if op.any():
+        # 開けた場所（ラフも含む芝）をコースの芝として使い、範囲も広げる
+        M["turf"] = (M["turf"] | op) & ~M["water"]
+        lab4, n4 = ndi.label(op | (M["area"] & M["turf"]))
+        area = np.zeros(op.shape, np.uint8)
+        for i in range(1, n4 + 1):
+            part = lab4 == i
+            if part.sum() * meta["mpp"] ** 2 < 2000:
+                continue
+            hull = cv2.convexHull(np.argwhere(part)[:, ::-1].astype(np.int32))
+            cv2.fillPoly(area, [hull], 1)
+        M["area"] = area.astype(bool) | (M["area"] & ndi.binary_dilation(op, iterations=60))
+        M["turf"] &= M["area"]
+        L_ = cv2.cvtColor(im, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32)
+        fw = M["turf"] & (L_ > np.percentile(L_[M["turf"]], 45))
+        M["fw"] = keep_big(ndi.binary_closing(ndi.binary_opening(fw, iterations=3), iterations=5), 1500)
     if "--hi" in sys.argv:
         hd = sys.argv[sys.argv.index("--hi") + 1]
         im18 = cv2.imread(os.path.join(hd, "aerial.jpg"))
