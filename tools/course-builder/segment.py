@@ -96,6 +96,16 @@ def segment(im):
     return dict(turf=turf, fw=fw, water=water, bunker=bk, area=area)
 
 
+def fw_score_hi(im18):
+    """ズーム18でのフェアウェイらしさ。緑が濃いほど・模様が少ないほど高い（芝の中で比べて使う）"""
+    lab = cv2.cvtColor(im18, cv2.COLOR_BGR2LAB).astype(np.float32)
+    L, A, B = lab[..., 0], lab[..., 1], lab[..., 2]
+    m = cv2.blur(L, (7, 7))
+    tex = cv2.GaussianBlur(np.sqrt(np.maximum(cv2.blur(L * L, (7, 7)) - m * m, 0)), (0, 0), 4)
+    Ab, Bb = cv2.GaussianBlur(A, (0, 0), 4), cv2.GaussianBlur(B, (0, 0), 4)
+    return -(Ab - 116) - 0.5 * (Bb - 146) - 0.35 * np.minimum(tex, 12)
+
+
 def sand_hi(im18, mpp18):
     """ズーム18の写真から砂（バンカー）を見分ける。明るく、緑っぽさがなく、まわりより目立って明るいもの"""
     lab = cv2.cvtColor(im18, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -209,6 +219,17 @@ if __name__ == "__main__":
         ys, xs = slice(max(0, -oy), min(canvas.shape[0], s18.shape[0] - oy)), slice(max(0, -ox), min(canvas.shape[1], s18.shape[1] - ox))
         canvas[ys, xs] = s18[ys.start + oy:ys.stop + oy, xs.start + ox:xs.stop + ox]
         b17 = cv2.resize(canvas, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_AREA) > 0.4
+        # フェアウェイらしさ（ズーム18）：芝の中で、緑が濃く（a*が低い・b*が低い）、刈り込みで模様が少ないところ
+        sc18 = fw_score_hi(im18)
+        cs = np.zeros(canvas.shape, np.float32)
+        cs[ys, xs] = sc18[ys.start + oy:ys.stop + oy, xs.start + ox:xs.stop + ox]
+        sc = cv2.resize(cs, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_AREA)
+        t_ = M["turf"]
+        sc = (sc - np.median(sc[t_])) / (np.std(sc[t_]) + 1e-6)
+        M["fwscore"] = sc.astype(np.float16)
+        fwg = t_ & (sc > 0.35)
+        fwg = ndi.binary_closing(ndi.binary_opening(fwg, iterations=2), iterations=3)
+        M["fw"] = keep_big(ndi.binary_fill_holes(fwg), 600)
         # コースの範囲の端にあるグリーンまわりのバンカーも拾う（範囲を少し広げて判定し、範囲もバンカーまで広げる）
         M["bunker"] = b17 & ndi.binary_dilation(M["area"] | M["turf"], iterations=15) & ~M["water"]
         lab3, n3 = ndi.label(M["area"] | ndi.binary_dilation(M["bunker"], iterations=6))

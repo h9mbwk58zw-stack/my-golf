@@ -149,6 +149,28 @@ def fit_tee(lp, target_yd, mpp):
     return [[int(round(t[0])), int(round(t[1]))]] + lp[1:], cur, d
 
 
+def fairway_by_hole(score, turf, lp, green, mpp):
+    """ホールごとにフェアウェイを決める：線の近くの芝の中で、そのホールの中で比べて
+    緑が濃く模様が少ない側をフェアウェイにする（季節や写真の色のちがいに強い）"""
+    near = np.zeros(turf.shape, np.uint8)
+    cv2.polylines(near, [np.array(lp, np.int32)], False, 1, thickness=int(2 * 32 * YD / mpp))
+    gz = ndi.binary_dilation(green, iterations=int(9 * YD / mpp))  # グリーンのまわり（カラー・花道）はフェアウェイにしない
+    R = turf & near.astype(bool) & ~gz
+    if R.sum() < 50:
+        return np.zeros_like(turf)
+    thr = max(np.percentile(score[R], 42), -0.6)
+    sm = cv2.GaussianBlur(score, (0, 0), 3 / mpp)
+    F = R & (sm > thr)
+    F = ndi.binary_opening(F, iterations=int(3 / mpp))
+    F = (cv2.GaussianBlur(F.astype(np.float32), (0, 0), 4 / mpp) > 0.5) & R
+    core = np.zeros(turf.shape, np.uint8)
+    cv2.polylines(core, [np.array(lp, np.int32)], False, 1, thickness=int(2 * 15 * YD / mpp))
+    lab, n = ndi.label(F)
+    keep = [i for i in range(1, n + 1)
+            if (lab == i).sum() * mpp * mpp > 300 and ((lab == i) & core.astype(bool)).any()]
+    return ndi.binary_fill_holes(np.isin(lab, keep))
+
+
 def ellipse_area(lp, shape, mpp):
     """ホールの線に沿った楕円（曲がるホールは区間ごとの楕円をなめらかにつないだ形）"""
     k = YD / mpp
@@ -268,6 +290,8 @@ def build(wd):
             B = M["bunker"] & P & ~A
             turf = (M["turf"] | gcirc.astype(bool)) & P
             F = M["fw"] & P & ~A
+            if "fwscore" in M:
+                F = fairway_by_hole(M["fwscore"].astype(np.float32), turf & ~A & ~B, lp, gcirc.astype(bool), mpp)
             on = ndi.binary_erosion(turf & ~A & ~B, iterations=int(8 * YD / mpp))
             if (F & corr).sum() < 0.15 * max(1, (turf & corr).sum()):
                 F = F | (on & corr)
